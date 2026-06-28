@@ -1,0 +1,6 @@
+.venv/
+.ipynb_checkpoints/
+debug_frames/
+__pycache__/
+*.pyc
+.vscode/
