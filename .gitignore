@@ -4,3 +4,5 @@ debug_frames/
 __pycache__/
 *.pyc
 .vscode/
+.aider*
+/ket_qua_cam1.avi

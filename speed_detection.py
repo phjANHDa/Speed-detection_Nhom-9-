@@ -34,8 +34,17 @@ CAMERA_PRESETS = {
         "red_y": 198,
         "green_y": 268,
         "distance_m": 15,
+        "lane_guides": [
+            ((170, 170), (150, 330)),
+            ((340, 165), (330, 330)),
+            ((610, 165), (620, 330)),
+            ((800, 170), (835, 330)),
+        ],
     },
 }
+
+LANE_LIMITS_LEFT_TO_RIGHT = [80, 80, 90, 90, 80, 80]
+LANE_BOUNDARIES_X = [0, 170, 340, 510, 610, 800, 1020]
 
 
 class Tracker:
@@ -94,6 +103,41 @@ def draw_label(frame, text, origin, font_scale=0.65, fg=(255, 255, 255), bg=(24,
     cv2.putText(frame, text, (x, y), font, font_scale, fg, thickness, cv2.LINE_AA)
 
 
+def get_lane_info(cx):
+    for lane_index, speed_limit in enumerate(LANE_LIMITS_LEFT_TO_RIGHT):
+        left_x = LANE_BOUNDARIES_X[lane_index]
+        right_x = LANE_BOUNDARIES_X[lane_index + 1]
+        if left_x <= cx < right_x:
+            return f"Lane {lane_index + 1}", speed_limit
+
+    return "Lane 6", LANE_LIMITS_LEFT_TO_RIGHT[-1]
+
+
+def draw_warning_board(frame, violations, total_violations):
+    panel_color = (10, 10, 12)
+    border_color = (0, 80, 255)
+    title_color = (0, 215, 255)
+    text_color = (230, 230, 230)
+    alert_color = (0, 0, 255)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (12, 12), (356, 178), panel_color, -1)
+    frame[:] = cv2.addWeighted(overlay, 0.78, frame, 0.22, 0)
+    cv2.rectangle(frame, (12, 12), (356, 178), border_color, 1)
+    cv2.putText(frame, "BANG CANH BAO QUA TOC DO", (28, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.58, title_color, 2, cv2.LINE_AA)
+    cv2.putText(frame, f"Tong vi pham: {total_violations}", (28, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.48, text_color, 1, cv2.LINE_AA)
+
+    recent = violations[-4:]
+    if not recent:
+        cv2.putText(frame, "Chua co xe vuot toc do", (28, 103), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (90, 255, 120), 1, cv2.LINE_AA)
+        return
+
+    for index, item in enumerate(recent):
+        y = 94 + index * 20
+        text = f"Xe {item['id']:>2} | {item['speed']:>3} km/h | GT {item['limit']}"
+        cv2.putText(frame, text, (28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.46, alert_color, 1, cv2.LINE_AA)
+
+
 def main():
     args = parse_args()
     preset = CAMERA_PRESETS[args.camera]
@@ -129,6 +173,9 @@ def main():
     dem_xe_xuong = []
     dem_xe_len = []
     toc_do_da_do = {}
+    lane_da_do = {}
+    vi_pham = {}
+    bang_canh_bao = []
 
     moc_do_y = preset["red_y"]
     moc_xanh_la_y = preset["green_y"]
@@ -175,6 +222,12 @@ def main():
                     dem_xe_xuong.append(object_id)
                     speed_kmh = (distance_m / elapsed_time) * 3.6
                     toc_do_da_do[object_id] = speed_kmh
+                    lane_name, speed_limit = get_lane_info(cx)
+                    lane_da_do[object_id] = (lane_name, speed_limit)
+                    display_speed = int(speed_kmh)
+                    if display_speed > speed_limit:
+                        vi_pham[object_id] = True
+                        bang_canh_bao.append({"id": object_id, "speed": display_speed, "limit": speed_limit})
 
             if moc_xanh_la_y < cy + offset and moc_xanh_la_y > cy - offset:
                 di_len[object_id] = time.time()
@@ -185,35 +238,37 @@ def main():
                     dem_xe_len.append(object_id)
                     speed_kmh = (distance_m / elapsed_time) * 3.6
                     toc_do_da_do[object_id] = speed_kmh
+                    lane_name, speed_limit = get_lane_info(cx)
+                    lane_da_do[object_id] = (lane_name, speed_limit)
+                    display_speed = int(speed_kmh)
+                    if display_speed > speed_limit:
+                        vi_pham[object_id] = True
+                        bang_canh_bao.append({"id": object_id, "speed": display_speed, "limit": speed_limit})
 
             if object_id in toc_do_da_do:
                 speed_kmh = toc_do_da_do[object_id]
+                _, speed_limit = lane_da_do.get(object_id, get_lane_info(cx))
+                is_violation = vi_pham.get(object_id, False)
+                blink_on = (count // 5) % 2 == 0
+                box_color = (0, 0, 255) if is_violation and blink_on else (0, 255, 0)
+                speed_color = (0, 0, 255) if is_violation else (0, 255, 255)
                 cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
-                cv2.rectangle(frame, (x3, y3), (x4, y4), (0, 255, 0), 2)
+                cv2.rectangle(frame, (x3, y3), (x4, y4), box_color, 2)
                 cv2.putText(frame, f"Xe {object_id}", (x3, y3 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, f"{int(speed_kmh)} km/h", (x3, y4 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(frame, f"{int(speed_kmh)}/{speed_limit}", (x3, y4 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.46, speed_color, 1, cv2.LINE_AA)
 
-        panel_color = (18, 18, 22)
-        text_color = (245, 245, 245)
-        muted_text_color = (210, 210, 210)
         red_color = (0, 0, 255)
         green_color = (0, 255, 0)
-        cyan_color = (255, 210, 80)
+        lane_color = (210, 210, 210)
 
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (12, 12), (330, 112), panel_color, -1)
-        frame = cv2.addWeighted(overlay, 0.72, frame, 0.28, 0)
+        draw_warning_board(frame, bang_canh_bao, len(bang_canh_bao))
+        cv2.putText(frame, f"Xe xuong: {len(dem_xe_xuong)} | Xe len: {len(dem_xe_len)}", (28, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (230, 230, 230), 1, cv2.LINE_AA)
 
-        cv2.putText(frame, preset["name"], (28, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.7, cyan_color, 2, cv2.LINE_AA)
-        cv2.putText(frame, f"Xe di xuong: {len(dem_xe_xuong)}", (28, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.58, text_color, 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Xe di len: {len(dem_xe_len)}", (28, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.58, muted_text_color, 1, cv2.LINE_AA)
+        for guide_start, guide_end in preset["lane_guides"]:
+            cv2.line(frame, guide_start, guide_end, lane_color, 1, cv2.LINE_AA)
 
-        cv2.line(frame, preset["red_line"][0], preset["red_line"][1], red_color, 3)
-        red_label_x = max(12, preset["red_line"][0][0])
-        green_label_x = max(12, preset["green_line"][0][0])
-        draw_label(frame, "MOC DO", (red_label_x, preset["red_line"][0][1] - 10), 0.55, (255, 255, 255), red_color, 1)
-        cv2.line(frame, preset["green_line"][0], preset["green_line"][1], green_color, 3)
-        draw_label(frame, "MOC XANH LA", (green_label_x, preset["green_line"][0][1] - 10), 0.55, (0, 0, 0), green_color, 1)
+        cv2.line(frame, preset["red_line"][0], preset["red_line"][1], red_color, 1)
+        cv2.line(frame, preset["green_line"][0], preset["green_line"][1], green_color, 1)
 
         if args.save_frames:
             cv2.imwrite(f"detected_frames/frame_{count}.jpg", frame)
